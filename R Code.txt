@@ -19,7 +19,7 @@ library(tidytext)
 library(stringr)
 library(ggplot2) 
 
-BAF.raw = read.csv("C:/Users/vaibh/Downloads/Dataset_5971.csv")%>%
+BAF.raw = read.csv("Dataset_5971.csv")%>%
   mutate(
     LABEL = str_trim(tolower(LABEL))  
   )
