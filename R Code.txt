@@ -1,0 +1,295 @@
+rm(list = ls())
+install.packages("dplyr")
+install.packages("tidytext")
+install.packages("forcats")
+install.packages("tidyr")
+install.packages('tidyverse')
+install.packages('tm')
+install.packages('caret')
+install.packages('e1071')
+
+library(tidyverse)
+library(tm)
+library(caret)
+library(e1071) 
+library(tidyr)
+library(forcats)
+library(dplyr)
+library(tidytext)
+library(stringr)
+library(ggplot2) 
+
+BAF.raw = read.csv("C:/Users/vaibh/Downloads/Dataset_5971.csv")%>%
+  mutate(
+    LABEL = str_trim(tolower(LABEL))  
+  )
+BAF = na.omit(BAF.raw)
+BAF$LABEL = as.factor(BAF$LABEL)
+
+
+#####################################################
+#PIE CHARTS OF Each varaible
+####################################################
+# Create a frequency table
+email_counts <- table(BAF$EMAIL)
+
+# Calculate percentages
+email_percent <- round(100 * email_counts / sum(email_counts), 1)
+
+# Create labels with percentages
+labels <- paste(names(email_counts), "\n", email_percent, "%")
+
+# Plot the pie chart
+pie(email_counts,
+    main = "Email Presence in BAF",
+    col = c("tomato", "skyblue"),
+    labels = labels)
+
+#for URL
+URL_counts <- table(BAF$URL)
+URL_percent <- round(100 * URL_counts / sum(URL_counts), 1)
+labels2 <- paste(names(URL_counts), "\n", URL_percent, "%")
+pie(URL_counts,
+    main = "URL Presence in BAF ",
+    col = c("tomato", "skyblue"),
+    labels = labels2)
+
+#For PHONE
+P_counts <- table(BAF$PHONE)
+P_percent <- round(100 * P_counts / sum(P_counts), 1)
+labels3 <- paste(names(P_counts), "\n", P_percent, "%")
+pie(P_counts,
+    main = "PHONE Presence in BAF ",
+    col = c("tomato", "skyblue"),
+    labels = labels3)
+
+
+#for LABEL
+label_counts <- table(BAF$LABEL)
+label_percent <- round(100 * label_counts / sum(label_counts), 1)
+labels <- paste(names(label_counts), "\n", label_percent, "%")
+pie(label_counts,
+    main = "Distribution of LABEL in BAF",
+    col = rainbow(length(label_counts)),
+    labels = labels)
+
+
+######################################################
+#STACKED BAR CHARTS FOR LABELS RELATIONSHIPS
+#######################################################
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+
+long_df <- BAF %>%
+  select(LABEL, EMAIL, PHONE, URL) %>%  # Select the binary variables
+  pivot_longer(cols = c(EMAIL, PHONE, URL), names_to = "variable", values_to = "value")  # pivot_longer()
+
+# Plot stacked bar charts
+ggplot(long_df, aes(x = LABEL, fill = value)) +
+  geom_bar(position = "fill") +  # Stacked bars (relative proportions)
+  facet_wrap(~variable) +  # One plot per variable
+  scale_y_continuous(labels = scales::percent) +  # Show y-axis as percentage
+  labs(title = "Distribution of Binary Variables by LABEL",
+       x = "Label (Spam vs Ham)",
+       y = "Percentage",
+       fill = "Value (Yes/No)") +
+  scale_fill_manual(values = c("No" = "lightblue", "Yes" = "salmon")) +  # Manually set colors
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#################################################################################
+#TFIDF of Words by class of Spam, Ham and Smishing 
+
+df = BAF
+#PERFORMING TFIDF ON THE TEXT MESSAGES
+df <- df %>%
+  mutate(ID = row_number())
+
+# Tokenize and remove stop words
+tidy_df <- df %>%
+  unnest_tokens(word, TEXT) %>%
+  anti_join(stop_words, by = "word")
+
+# Count word occurrences per label
+word_counts <- tidy_df %>%
+  count(LABEL, word, sort = TRUE)
+
+# Compute TF-IDF
+tf_idf_df <- word_counts %>%
+  bind_tf_idf(term = word, document = LABEL, n = n)
+
+# Get top 10 TF-IDF words per label
+top_words <- tf_idf_df %>%
+  group_by(LABEL) %>%
+  slice_max(tf_idf, n = 10, with_ties = FALSE) %>%
+  ungroup()
+#plotting top word graph
+
+ggplot(top_words, aes(x = reorder_within(word, tf_idf, LABEL), y = tf_idf, fill = LABEL)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ LABEL, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Top TF-IDF Words by Class (Spam vs Ham)",
+       x = "Word", y = "TF-IDF")
+
+
+###############################################################################
+# Support Vector Machines
+
+# =============================
+# SUPPORT VECTOR MACHINE (SVM)
+# =============================
+library(caret)
+library(tm)
+library(e1071)
+
+# Create Corpus from TEXT
+corpus <- VCorpus(VectorSource(BAF$TEXT)) %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, stopwords("english")) %>%
+  tm_map(stripWhitespace)
+
+# Create TF-IDF Document-Term Matrix
+dtm <- DocumentTermMatrix(corpus, control = list(weighting = weightTfIdf))
+dtm <- removeSparseTerms(dtm, 0.99)  # remove rare words
+data_tfidf <- as.data.frame(as.matrix(dtm))
+data_tfidf$LABEL <- BAF$LABEL
+
+# Train-test split
+set.seed(123)
+split <- createDataPartition(data_tfidf$LABEL, p = 0.8, list = FALSE)
+train_svm <- data_tfidf[split, ]
+test_svm <- data_tfidf[-split, ]
+
+# Train SVM model
+svm_model <- svm(LABEL ~ ., data = train_svm, kernel = "linear")
+
+# Predict and evaluate
+svm_pred <- predict(svm_model, newdata = test_svm)
+cm <- confusionMatrix(svm_pred, test_svm$LABEL)
+print(cm)
+print(cm$overall['Accuracy'])
+print(cm$byClass[, c("Precision", "Recall", "F1")])
+
+# Run PCA on TF-IDF data
+pca_result <- prcomp(data_tfidf[,-ncol(data_tfidf)], center = TRUE, scale. = TRUE)
+pca_data <- data.frame(pca_result$x[,1:2])
+pca_data$LABEL <- data_tfidf$LABEL
+pca_data$Predicted <- predict(svm_model, newdata = data_tfidf)
+
+# Plot with actual vs predicted
+library(ggplot2)
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Predicted, shape = LABEL)) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "SVM Classification in PCA Space",
+       subtitle = "Color = Predicted | Shape = Actual",
+       x = "Principal Component 1", y = "Principal Component 2") +
+  theme_minimal()
+
+# Convert confusion matrix to a data frame for plotting
+cm_df <- as.data.frame(cm$table)
+colnames(cm_df) <- c("Predicted", "Actual", "Freq")
+
+# Plot the confusion matrix heatmap
+ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Freq), size = 5) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix (SVM)", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+
+################################################################################
+#Neural network
+
+# ======================================
+# ======================================
+# Load Required Libraries
+# ======================================
+library(tm)
+library(caret)
+library(nnet)
+library(ggplot2)
+library(dplyr)
+
+# ======================================
+# Text Preprocessing and TF-IDF
+# ======================================
+corpus <- VCorpus(VectorSource(BAF$TEXT)) %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, stopwords("english")) %>%
+  tm_map(stripWhitespace)
+
+# Remove empty documents
+clean_texts <- sapply(corpus, content)
+non_empty_idx <- which(nchar(clean_texts) > 0)
+corpus_clean <- corpus[non_empty_idx]
+BAF_clean <- BAF[non_empty_idx, ]
+
+# Create TF-IDF matrix
+dtm <- DocumentTermMatrix(corpus_clean, control = list(weighting = weightTfIdf))
+dtm <- removeSparseTerms(dtm, 0.99)
+tfidf_matrix <- as.data.frame(as.matrix(dtm))
+
+# Add Metadata
+meta_features <- BAF_clean[, c("EMAIL", "PHONE", "URL")]
+data_combined <- cbind(tfidf_matrix, meta_features)
+data_combined$LABEL <- BAF_clean$LABEL
+
+# ======================================
+# Train-Test Split
+# ======================================
+set.seed(123)
+split_idx <- createDataPartition(data_combined$LABEL, p = 0.8, list = FALSE)
+train_data <- data_combined[split_idx, ]
+test_data <- data_combined[-split_idx, ]
+
+# ======================================
+# Train Neural Network using caret
+# ======================================
+ctrl <- trainControl(method = "cv", number = 5)
+
+set.seed(123)
+nn_model <- train(LABEL ~ ., 
+                  data = train_data,
+                  method = "nnet",
+                  trControl = ctrl,
+                  tuneGrid = expand.grid(size = 5, decay = 5e-4),
+                  maxit = 200,
+                  trace = FALSE)
+
+# Print results
+print(nn_model)
+
+# ======================================
+# Predict and Evaluate
+# ======================================
+pred_labels <- predict(nn_model, newdata = test_data)
+cm <- confusionMatrix(pred_labels, test_data$LABEL)
+print(cm)
+print(cm$overall["Accuracy"])
+print(cm$byClass[, c("Precision", "Recall", "F1")])
+
+# ======================================
+# Plot Confusion Matrix Heatmap
+# ======================================
+library(reshape2)
+cm_df <- as.data.frame(cm$table)
+colnames(cm_df) <- c("Predicted", "Actual", "Freq")
+
+ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Freq), size = 4) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix (Neural Network - caret)",
+       x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+
